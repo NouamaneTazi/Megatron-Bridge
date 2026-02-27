@@ -110,6 +110,7 @@ model.moe_router_dtype=fp32 \
 model.moe_shared_expert_overlap=false \
 model.moe_router_pre_softmax=true \
 model.moe_router_topk_scaling_factor=2.5 \
+model.moe_per_layer_logging=true \
 train.global_batch_size=${GBS} \
 train.micro_batch_size=${MBS} \
 train.train_iters=${TRAIN_ITERS} \

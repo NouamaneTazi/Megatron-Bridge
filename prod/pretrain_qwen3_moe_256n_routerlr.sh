@@ -8,8 +8,8 @@
 #
 # Requires: feat/router-lr branch on Megatron-LM
 #
-# Usage: SLURM_JOB_ID=1583727 bash prod/pretrain_qwen3_moe_256n_routerlr.sh [extra hydra overrides...]
-# Usage: SLURM_JOB_ID=1583818 bash prod/pretrain_qwen3_moe_256n_routerlr.sh [extra hydra overrides...]
+# Usage: SLURM_JOB_ID=1583727 bash prod/pretrain_qwen3_moe_256n_routerlr.sh model.moe_per_layer_logging=true
+# Usage: SLURM_JOB_ID=1583818 bash prod/pretrain_qwen3_moe_256n_routerlr.sh 
 set -euo pipefail
 export WANDB_API_KEY=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
 
@@ -50,8 +50,8 @@ MOE_LAYER_FREQ=$(python3 -c "print(','.join(['0']+['1']*($NUM_LAYERS-1)))")
 MBS=${MBS:-2}
 GBS=$((2 * TOTAL_GPUS * MBS))
 TRAIN_ITERS=6001
-LR=${LR:-6e-4}
-# LR=${LR:-1e-3}
+# LR=${LR:-6e-4}
+LR=${LR:-1e-3}
 SAVE_INTERVAL=${SAVE_INTERVAL:-1000}
 SEQ_LENGTH=4096
 
@@ -63,8 +63,8 @@ TOKENIZER="alehc/swissai-tokenizer"
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 WANDB_PROJECT="qwen3-moe"
-RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_warmup_lr_routerlr"
-# RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_warmup_lr2_routerlr"
+# RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_warmup_lr_routerlr"
+RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_warmup_lr2_routerlr"
 TIMESTAMP=$(date +'%y%m%d_%H%M%S')
 CKPT_DIR="/capstor/scratch/cscs/ntazi/checkpoints/${RUN_NAME}"
 LOG_DIR="${SCRIPT_DIR}/slurm_logs/${RUN_NAME}"
@@ -111,6 +111,7 @@ model.moe_router_dtype=fp32 \
 model.moe_shared_expert_overlap=false \
 model.moe_router_pre_softmax=true \
 model.moe_router_topk_scaling_factor=2.5 \
+model.moe_per_layer_logging=true \
 train.global_batch_size=${GBS} \
 train.micro_batch_size=${MBS} \
 train.train_iters=${TRAIN_ITERS} \
