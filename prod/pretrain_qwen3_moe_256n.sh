@@ -6,6 +6,7 @@
 #
 # Usage: SLURM_JOB_ID=1581544 bash prod/pretrain_qwen3_moe_256n.sh [extra hydra overrides...]
 set -euo pipefail
+export WANDB_API_KEY=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
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 MEGATRON_BRIDGE=/iopsstor/scratch/cscs/ntazi/projects/Megatron-Bridge

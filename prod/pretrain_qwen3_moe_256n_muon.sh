@@ -1,18 +1,18 @@
 #!/bin/bash
 # Qwen3-style 128-expert MoE pretraining on 256 GH200 nodes (CSCS Alps)
-# ** AdEMAMix optimizer variant **
+# ** Distributed Muon optimizer variant **
 #
 # Config: PP=4 EP=4, Nemotron router (sigmoid + seq_aux_loss + expert bias),
 #         1 dense first layer, selective recomputation, English DCLM 100B dataset.
 #
-# Usage: SLURM_JOB_ID=1581740 bash prod/pretrain_qwen3_moe_256n_ademamix.sh [extra hydra overrides...]
+# Usage: SLURM_JOB_ID=1582204 bash prod/pretrain_qwen3_moe_256n_muon.sh [extra hydra overrides...]
 set -euo pipefail
 export WANDB_API_KEY=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
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 MEGATRON_BRIDGE=/iopsstor/scratch/cscs/ntazi/projects/Megatron-Bridge
 MEGATRON_LM=/iopsstor/scratch/cscs/ntazi/projects/Megatron-LM
-MEGATRON_LM_BRANCH=feat/ademamix   # requires AdEMAMix optimizer branch
+EMERGING_OPTIMIZERS=/iopsstor/scratch/cscs/ahernnde/opts/Emerging-Optimizers
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 CONTAINER_EDF="/capstor/store/cscs/swissai/a139/containers/ngc_25-11-nemo-alps2.toml"
 PATCHED_TE_SO=/iopsstor/scratch/cscs/ntazi/projects/TransformerEngine/build/cmake/libtransformer_engine.so
@@ -51,19 +51,18 @@ LR=3e-4
 SAVE_INTERVAL=${SAVE_INTERVAL:-500}
 SEQ_LENGTH=4096
 
-# ── AdEMAMix ────────────────────────────────────────────────────────────────
-OPTIMIZER=ademamix
-ADEMAMIX_ALPHA=5
-ADEMAMIX_BETA3=0.9999
-ADEMAMIX_BETA3_WARMUP=100000      # -1 = disabled (maps to None)
-ADEMAMIX_ALPHA_WARMUP=100000      # -1 = disabled (maps to None)
+# ── Distributed Muon ───────────────────────────────────────────────────────
+OPTIMIZER=dist_muon
+MUON_MOMENTUM=0.95
+MUON_USE_NESTEROV=true
+MUON_SCALE_MODE=unit_rms_norm
 
 # ── Data & Tokenizer ─────────────────────────────────────────────────────────
 TOKENIZER="alehc/swissai-tokenizer"
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 WANDB_PROJECT="qwen3-moe"
-RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_ademamix"
+RUN_NAME="${NNODES}n_pp${PP}_ep${EP}_gbs${GBS}_mbs${MBS}_muon"
 TIMESTAMP=$(date +'%y%m%d_%H%M%S')
 CKPT_DIR="/capstor/scratch/cscs/ntazi/checkpoints/${RUN_NAME}"
 LOG_DIR="${SCRIPT_DIR}/slurm_logs/${RUN_NAME}"
@@ -116,12 +115,16 @@ train.train_iters=${TRAIN_ITERS} \
 train.eval_interval=null \
 optimizer.optimizer=${OPTIMIZER} \
 optimizer.lr=${LR} \
-optimizer.ademamix_alpha=${ADEMAMIX_ALPHA} \
-optimizer.ademamix_beta3=${ADEMAMIX_BETA3} \
-optimizer.ademamix_beta3_warmup=${ADEMAMIX_BETA3_WARMUP} \
-optimizer.ademamix_alpha_warmup=${ADEMAMIX_ALPHA_WARMUP} \
+optimizer.muon_momentum=${MUON_MOMENTUM} \
+optimizer.muon_use_nesterov=${MUON_USE_NESTEROV} \
+optimizer.muon_scale_mode=${MUON_SCALE_MODE} \
+optimizer.use_distributed_optimizer=false \
+optimizer.overlap_param_gather=false \
 scheduler.lr_warmup_iters=40 \
 scheduler.lr_decay_style=constant \
+ddp.use_distributed_optimizer=false \
+ddp.overlap_grad_reduce=false \
+ddp.overlap_param_gather=false \
 ddp.align_param_gather=true \
 ddp.check_for_nan_in_grad=false \
 ddp.disable_symmetric_registration=true \
@@ -142,16 +145,12 @@ dataset.mock=false"
 # Append extra CLI overrides
 [[ $# -gt 0 ]] && TRAINING_PARAMS="${TRAINING_PARAMS} $*"
 
-# ── Ensure AdEMAMix branch ───────────────────────────────────────────────────
-echo "Switching Megatron-LM to branch ${MEGATRON_LM_BRANCH} ..."
-git -C "${MEGATRON_LM}" checkout "${MEGATRON_LM_BRANCH}"
-
 # ── Validate ─────────────────────────────────────────────────────────────────
 echo "================================================"
 echo "Config: ${RUN_NAME}"
 echo "Parallelism: DP=${DP} TP=${TP} PP=${PP} EP=${EP} (${TOTAL_GPUS} GPUs)"
 echo "Batch: GBS=${GBS} MBS=${MBS} | Iters: ${TRAIN_ITERS} | LR: ${LR}"
-echo "Optimizer: ${OPTIMIZER} | alpha=${ADEMAMIX_ALPHA} beta3=${ADEMAMIX_BETA3}"
+echo "Optimizer: ${OPTIMIZER} | momentum=${MUON_MOMENTUM} nesterov=${MUON_USE_NESTEROV} scale=${MUON_SCALE_MODE}"
 echo "Model: ${NUM_LAYERS}L ${HIDDEN_SIZE}H ${NUM_EXPERTS}E top-${MOE_ROUTER_TOPK}"
 echo "Checkpoint: ${CKPT_DIR}"
 echo "================================================"
@@ -200,6 +199,7 @@ export MASTER_PORT=${MASTER_PORT}
 # ── Code Paths ──
 export PYTHONPATH=${MEGATRON_BRIDGE}/src:\${PYTHONPATH:-}
 export PYTHONPATH=${MEGATRON_LM}:\${PYTHONPATH:-}
+export PYTHONPATH=${EMERGING_OPTIMIZERS}:\${PYTHONPATH:-}
 export PP_LAYOUT=\"${PP_LAYOUT}\"
 
 # ── Patched TransformerEngine ──

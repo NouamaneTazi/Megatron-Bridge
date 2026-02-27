@@ -216,3 +216,4 @@ logs/
 .worktrees/
 noua/*
 
+prod/slurm_logs
