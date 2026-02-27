@@ -150,7 +150,8 @@ class Nemotron3NanoProvider(NemotronHModelProvider):
     """Configuration for a 3B parameter Nemotron 3 Nano model."""
 
     num_query_groups: int = 2
-    hybrid_override_pattern: str = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
+    # hybrid_override_pattern: str = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
+    hybrid_override_pattern: str = "EEEEE*EEEEE*EEEEE*EEEEE*EEEEE*EEEEE*EEEEE*EEEEE*EEEE"
     num_layers: int = 52
     hidden_size: int = 2688
     mamba_num_heads: int = 64

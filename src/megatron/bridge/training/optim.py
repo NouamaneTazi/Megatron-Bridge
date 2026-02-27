@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from typing import Callable, Optional, Union
 
 import torch.nn as nn
@@ -45,6 +46,8 @@ def setup_optimizer(
     Returns:
         tuple containing the optimizer and scheduler
     """
+    logging.warning(f"[DEBUG optim.setup_optimizer] optimizer_config.overlap_param_gather = {getattr(optimizer_config, 'overlap_param_gather', 'N/A')}")
+    logging.warning(f"[DEBUG optim.setup_optimizer] optimizer_config id = {id(optimizer_config)}")
     optimizer = get_megatron_optimizer(
         optimizer_config,
         model,

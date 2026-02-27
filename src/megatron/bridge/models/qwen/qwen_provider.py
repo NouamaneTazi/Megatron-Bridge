@@ -23,6 +23,7 @@ from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
 from megatron.core.transformer.spec_utils import ModuleSpec
 
 from megatron.bridge.models.gpt_provider import GPTModelProvider
+from megatron.bridge.models.transformer_config import MLATransformerConfig
 
 
 try:
@@ -355,13 +356,19 @@ class Qwen3ModelProvider32B(Qwen3ModelProvider):
 
 
 # =============================================================================
-# Qwen 3 MoE Model Provider (based on GPTProvider)
+# Qwen 3 MoE Model Provider (based on MLATransformerConfig + GPTProvider)
 # =============================================================================
 
 
 @dataclass
-class Qwen3MoEModelProvider(GPTModelProvider):
-    """Base provider for Qwen 3 MoE Models."""
+class Qwen3MoEModelProvider(MLATransformerConfig, GPTModelProvider):
+    """Base provider for Qwen 3 MoE Models.
+
+    Inherits from MLATransformerConfig to support Multi-Latent Attention (MLA)
+    via ``multi_latent_attention=true``. MLA is disabled by default; when enabled,
+    all MLA fields (q_lora_rank, kv_lora_rank, qk_head_dim, etc.) are available
+    and compatible with AutoBridge.mla_transformer_config extraction.
+    """
 
     normalization: str = "RMSNorm"
     activation_func: Callable = F.silu
@@ -394,6 +401,17 @@ class Qwen3MoEModelProvider(GPTModelProvider):
     moe_grouped_gemm: bool = True
     moe_token_dispatcher_type: str = "alltoall"
     moe_permute_fusion: bool = True
+
+    # MLA: disabled by default, opt-in via model.multi_latent_attention=true
+    multi_latent_attention: bool = False
+    apply_rope_fusion: bool = False
+
+    # DSA (Differentiable Search Attention) parameters (opt-in via experimental_attention_variant)
+    experimental_attention_variant: Optional[str] = None
+    dsa_indexer_n_heads: Optional[int] = None
+    dsa_indexer_head_dim: Optional[int] = None
+    dsa_indexer_topk: Optional[int] = None
+    dsa_indexer_loss_coeff: Optional[float] = None
 
 
 @dataclass

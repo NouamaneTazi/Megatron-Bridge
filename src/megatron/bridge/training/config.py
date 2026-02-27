@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 import os
 import signal
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union
 
 import torch
 from megatron.core.datasets.gpt_dataset import GPTDatasetConfig as MCoreGPTDatasetConfig
@@ -28,7 +30,9 @@ from megatron.core.transformer.enums import AttnBackend
 
 from megatron.bridge.data.datasets.packed_sequence import PackedSequenceSpecs
 from megatron.bridge.models import GPTModelProvider, T5ModelProvider
-from megatron.bridge.models.mamba.mamba_provider import MambaModelProvider
+
+if TYPE_CHECKING:
+    from megatron.bridge.models.mamba.mamba_provider import MambaModelProvider
 from megatron.bridge.peft.base import PEFT
 from megatron.bridge.training.comm_overlap import CommOverlapConfig
 from megatron.bridge.training.deepep import validate_deepep
@@ -1259,6 +1263,11 @@ class ConfigContainer(Container):
             if self.optimizer.use_precision_aware_optimizer:
                 self.ddp.preserve_fp32_weights = False
 
+            # Disable DeepEP when FSDP is enabled (incompatible)
+            if getattr(self.model, "moe_flex_dispatcher_backend", None) == "deepep":
+                warn_rank_0("DeepEP is not supported with FSDP, disabling moe_flex_dispatcher_backend")
+                self.model.moe_flex_dispatcher_backend = None
+
         # ModelOpt/Quantization checks
         if getattr(self.model, "restore_modelopt_state", False):
             assert not self.model.gradient_accumulation_fusion, (
@@ -1449,9 +1458,19 @@ def runtime_config_update(cfg: ConfigContainer) -> None:
     cfg.set_data_parallel_size()
 
     # Apply communication overlap configuration if provided
+    import logging
+    logging.warning(f"[DEBUG config.py] cfg.comm_overlap = {cfg.comm_overlap}")
+    logging.warning(f"[DEBUG config.py] BEFORE: cfg.optimizer.overlap_param_gather = {getattr(cfg.optimizer, 'overlap_param_gather', 'N/A')}")
+    logging.warning(f"[DEBUG config.py] BEFORE: cfg.ddp.overlap_param_gather = {getattr(cfg.ddp, 'overlap_param_gather', 'N/A')}")
+    logging.warning(f"[DEBUG config.py] cfg.optimizer id = {id(cfg.optimizer)}")
     if cfg.comm_overlap is not None:
         cfg.comm_overlap.finalize()
         cfg.comm_overlap.setup(cfg.model, cfg.optimizer, cfg.ddp)
+        logging.warning(f"[DEBUG config.py] After comm_overlap.setup:")
+        logging.warning(f"  cfg.optimizer.overlap_param_gather = {getattr(cfg.optimizer, 'overlap_param_gather', 'N/A')}")
+        logging.warning(f"  cfg.ddp.overlap_param_gather = {getattr(cfg.ddp, 'overlap_param_gather', 'N/A')}")
+    else:
+        logging.warning(f"[DEBUG config.py] comm_overlap is None - skipping setup")
 
     # Validate configuration after all modifications
     cfg.validate()
@@ -1480,3 +1499,17 @@ def _validate_and_sync_distributed_optimizer_settings(config: ConfigContainer) -
             )
         config.ddp.use_distributed_optimizer = True
         config.optimizer.use_distributed_optimizer = True
+
+    # Sync overlap_param_gather between DDP and optimizer configs
+    ddp_overlap = getattr(config.ddp, 'overlap_param_gather', False)
+    optimizer_overlap = getattr(config.optimizer, 'overlap_param_gather', False)
+    if ddp_overlap or optimizer_overlap:
+        if ddp_overlap != optimizer_overlap:
+            warn_rank_0(
+                f"overlap_param_gather settings were not in sync: "
+                f"ddp.overlap_param_gather={ddp_overlap}, "
+                f"optimizer.overlap_param_gather={optimizer_overlap}. "
+                f"Automatically enabling overlap_param_gather for both settings."
+            )
+        config.ddp.overlap_param_gather = True
+        config.optimizer.overlap_param_gather = True

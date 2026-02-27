@@ -599,11 +599,22 @@ class CommOverlapConfig:
             model_config.tp_comm_bootstrap_backend = comm_overlap_cfg.tp_comm_bootstrap_backend
 
         # Data parallel overlap is only available with the Megatron DDP and Distributed optimizer
+        logging.warning(f"[DEBUG comm_overlap.setup] Checking DP overlap conditions:")
+        logging.warning(f"  isinstance(optimizer_config, OptimizerConfig) = {isinstance(optimizer_config, OptimizerConfig)}")
+        logging.warning(f"  isinstance(ddp_config, DistributedDataParallelConfig) = {isinstance(ddp_config, DistributedDataParallelConfig)}")
+        logging.warning(f"  ddp_config.use_distributed_optimizer = {ddp_config.use_distributed_optimizer}")
+        logging.warning(f"  BEFORE: optimizer_config.overlap_param_gather = {getattr(optimizer_config, 'overlap_param_gather', 'N/A')}")
+        logging.warning(f"  BEFORE: ddp_config.overlap_param_gather = {getattr(ddp_config, 'overlap_param_gather', 'N/A')}")
         if (
             isinstance(optimizer_config, OptimizerConfig)
             and isinstance(ddp_config, DistributedDataParallelConfig)
             and ddp_config.use_distributed_optimizer
         ):
             comm_overlap_cfg = self._get_optimizer_overlap_cfgs(model_config)
+            logging.warning(f"  comm_overlap_cfg.overlap_param_gather = {comm_overlap_cfg.overlap_param_gather}")
             self._apply_cfgs(comm_overlap_cfg, optimizer_config)
             self._apply_cfgs(comm_overlap_cfg, ddp_config)
+            logging.warning(f"  AFTER: optimizer_config.overlap_param_gather = {optimizer_config.overlap_param_gather}")
+            logging.warning(f"  AFTER: ddp_config.overlap_param_gather = {ddp_config.overlap_param_gather}")
+        else:
+            logging.warning("  Skipping DP overlap setup - conditions not met")

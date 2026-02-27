@@ -357,13 +357,52 @@ def _timers_write_to_wandb(
     reset: bool = True,
     barrier: bool = False,
 ) -> None:
-    """Patch to write timers to wandb for Megatron Core Timers."""
-    # currently when using add_scalars,
-    # torch.utils.add_scalars makes each timer its own run, which
-    # polutes the runs list, so we just add each as a scalar
+    """Patch to write timers to wandb for Megatron Core Timers.
+
+    Logs both the global max time and per-PP-rank max times for each timer.
+    Per-PP-rank metrics are logged as '{timer}-time/pp_rank_{i}' to enable
+    identifying the slowest pipeline stage.
+    """
     assert normalizer > 0.0
-    name_to_min_max_time = self._get_global_min_max_time(names, reset, barrier, normalizer)
-    if writer is not None:
-        for name in name_to_min_max_time:
-            _, max_time = name_to_min_max_time[name]
-            writer.log({name + "-time": max_time}, iteration)
+
+    # Get per-rank timing data (all-gather across all ranks).
+    # Shape: [world_size, len(names)], times in seconds.
+    rank_name_to_time = self._get_elapsed_time_all_ranks(names, reset=reset, barrier=barrier)
+    if rank_name_to_time is None or writer is None:
+        return
+
+    world_size = rank_name_to_time.shape[0]
+
+    # Compute global max for each timer (original behavior).
+    metrics = {}
+    for i, name in enumerate(names):
+        col = rank_name_to_time[:, i]
+        max_time = col.max().item() / normalizer
+        if max_time > 0:
+            metrics[name + "-time"] = max_time
+
+    # Per-PP-rank max times: derive mapping from parallelism sizes (no extra communication).
+    try:
+        from megatron.core import parallel_state
+
+        pp_size = parallel_state.get_pipeline_model_parallel_world_size()
+        if pp_size > 1:
+            tp_size = parallel_state.get_tensor_model_parallel_world_size()
+            ep_size = parallel_state.get_expert_model_parallel_world_size()
+            stride = tp_size * ep_size
+            pp_rank_map = torch.tensor([(g // stride) % pp_size for g in range(world_size)])
+
+            for i, name in enumerate(names):
+                col = rank_name_to_time[:, i]
+                if col.max().item() <= 0:
+                    continue
+                for pp_rank in range(pp_size):
+                    mask = pp_rank_map == pp_rank
+                    pp_max = col[mask].max().item() / normalizer
+                    if pp_max > 0:
+                        metrics[f"{name}-time/pp_rank_{pp_rank}"] = pp_max
+    except (ImportError, RuntimeError):
+        pass  # parallel_state not initialized; skip per-PP breakdown
+
+    if metrics:
+        writer.log(metrics, iteration)

@@ -216,6 +216,9 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
         # Compute space_sensitive attribute for template handling in datasets
         self.space_sensitive = _compute_space_sensitive(self, default=False)
 
+        print_rank_0(f"> HuggingFaceTokenizer loaded: {pretrained_model_name_or_path}")
+        print_rank_0(f">   vocab_size: {len(self._tokenizer)}")
+
     @property
     def vocab_size(self):
         """Returns the size of the vocabulary."""

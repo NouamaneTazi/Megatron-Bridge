@@ -27,6 +27,7 @@ from megatron.core.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.rerun_state_machine import RerunDataIterator
 from megatron.core.transformer import MegatronModule
+from megatron.core.utils import get_model_config
 from megatron.core.process_groups_config import ProcessGroupCollection
 
 from megatron.bridge.data.loaders import setup_data_iterators
@@ -212,6 +213,9 @@ def setup(
 
         cfg.model.register_pre_wrap_hook(modelopt_pre_wrap_hook)
 
+    cfg.model.timers = timers
+    cfg.optimizer.timers = timers
+
     model = cfg.model.provide_distributed_model(
         ddp_config=cfg.ddp,
         use_megatron_fsdp=cfg.dist.use_megatron_fsdp,
@@ -220,8 +224,13 @@ def setup(
         data_parallel_random_init=cfg.rng.data_parallel_random_init,
     )
 
-    cfg.model.timers = timers
-    cfg.optimizer.timers = timers
+    # Set timers on model's TransformerConfig so pipeline schedule can use them.
+    # cfg.model.timers doesn't propagate through omegaconf to the model's internal config.
+    for model_chunk in (model if isinstance(model, list) else [model]):
+        model_config = get_model_config(model_chunk)
+        if model_config is not None:
+            model_config.timers = timers
+
     no_weight_decay_cond = get_no_weight_decay_cond(
         cfg.scheduler.no_weight_decay_cond_type,
         default_skip_embedding_weight_decay=cfg.model.embedding_init_method_std is not None,

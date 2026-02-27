@@ -434,12 +434,20 @@ def training_log(
 
     if writer and (iteration % logger_config.tensorboard_log_interval == 0):
         if config.profiling:
-            if config.profiling.record_memory_history and is_last_rank():
-                snapshot = torch.cuda.memory._snapshot()
-                from pickle import dump
-
-                with open(config.profiling.memory_snapshot_path, "wb") as f:
-                    dump(snapshot, f)
+            if config.profiling.record_memory_history and iteration==2:
+                if is_last_rank():
+                    snapshot = torch.cuda.memory._snapshot()
+                    from pickle import dump
+                    import os
+                    os.makedirs(os.path.dirname(config.profiling.memory_snapshot_path), exist_ok=True)
+                    print_rank_last(f"AAA Saving memory snapshot to {config.profiling.memory_snapshot_path}")
+                    with open(config.profiling.memory_snapshot_path, "wb") as f:
+                        dump(snapshot, f)
+                #     print_rank_last(f"Exiting program at iteration {iteration}")
+                # torch.distributed.barrier()
+                # import os
+                # torch.distributed.destroy_process_group()                                                                                                                                     
+                # os._exit(0)
         if logger_config.log_throughput_to_tensorboard:
             throughput_report = report_throughput(
                 iteration=iteration,
@@ -541,6 +549,7 @@ def training_log(
             track_names.append("global_load_balancing_loss")
         if config.model.moe_z_loss_coeff is not None:
             track_names.append("z_loss")
+        track_names.append("expert_max_violation")
 
         if config.model.is_hybrid_model:
             layers = config.model.hybrid_override_pattern.count('E')
@@ -598,6 +607,15 @@ def training_log(
         if logger_config.log_throughput:
             log_string += f" throughput per GPU (TFLOP/s/GPU): {per_gpu_tf:.1f} |"
 
+        # Calculate estimated time to 1T tokens
+        tokens_per_iter = batch_size * config.dataset.sequence_length
+        tokens_per_sec = tokens_per_iter / elapsed_time_per_iteration
+        secs_to_1t = 1e12 / tokens_per_sec
+        days, remainder = divmod(int(secs_to_1t), 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, _ = divmod(remainder, 60)
+        log_string += f" time to 1T tokens: {days}d{hours:02d}h{minutes:02d}m |"
+
         if energy_monitor is not None:
             energy = (energy_monitor.lap() / total_iterations) / get_world_size_safe()
             power = energy / elapsed_time_per_iteration
@@ -647,8 +665,7 @@ def training_log(
             memory_string = f"(after {iteration} iterations) memory (GB)"
             for metric, value in report_memory(logger_config.memory_keys).items():
                 memory_string += f" | {metric}: {value}"
-            if parallel_state.get_data_parallel_rank() == 0:
-                print("[Rank {}] {}".format(torch.distributed.get_rank(), memory_string), flush=True)
+            print("[Rank {}] {}".format(torch.distributed.get_rank(), memory_string), flush=True)
             report_memory_flag = False
         timers.log(timers_to_log, normalizer=logger_config.log_interval)
 

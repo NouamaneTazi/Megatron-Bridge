@@ -12,10 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+import os
+from pprint import pformat
+from typing import TYPE_CHECKING, Optional
 
 import torch.distributed as dist
-from nvidia_resiliency_ext.inprocess import CallWrapper
+
+if TYPE_CHECKING:
+    from nvidia_resiliency_ext.inprocess import CallWrapper
 
 from megatron.bridge.data.utils import get_dataset_provider
 from megatron.bridge.training.checkpointing import save_checkpoint
@@ -60,6 +64,35 @@ def pretrain(
         This is an experimental API and is subject to change in backwards
         incompatible ways without notice.
     """
+    # Enable memory history recording at the VERY START - before anything else
+    import torch
+    if config.profiling and config.profiling.record_memory_history:
+        torch.cuda.memory._record_memory_history(
+        )
+        print(f"[MEM PROFILE] Memory history recording enabled at start of pretrain()")
+
+        # Register OOM observer to dump snapshot on CUDA OOM (fires on ANY rank that OOMs)
+        snapshot_path = config.profiling.memory_snapshot_path
+        def _oom_observer(device, alloc, device_alloc, device_free):
+            import os
+            from pickle import dump
+            rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")))
+            base, ext = os.path.splitext(snapshot_path)
+            oom_path = f"{base}_oom_rank{rank}{ext}"
+            os.makedirs(os.path.dirname(oom_path) or ".", exist_ok=True)
+            print(
+                f"[MEM PROFILE] CUDA OOM on rank {rank} (device={device}, "
+                f"alloc={alloc / 1e9:.2f} GB, device_alloc={device_alloc / 1e9:.2f} GB, "
+                f"device_free={device_free / 1e9:.2f} GB). Saving snapshot to {oom_path}"
+            )
+            snapshot = torch.cuda.memory._snapshot()
+            with open(oom_path, "wb") as f:
+                dump(snapshot, f)
+            print(f"[MEM PROFILE] OOM snapshot saved to {oom_path}")
+
+        torch._C._cuda_attach_out_of_memory_observer(_oom_observer)
+        print(f"[MEM PROFILE] OOM observer registered (will dump snapshot on any rank that OOMs)")
+
     # Apply runtime config updates prior to creating/attaching GlobalState
     runtime_config_update(config)
 
@@ -96,7 +129,7 @@ def _pretrain(
     state: GlobalState,
     forward_step_func: ForwardStepCallable,
     store: Optional[dist.Store] = None,
-    inprocess_call_wrapper: Optional[CallWrapper] = None,
+    inprocess_call_wrapper: Optional["CallWrapper"] = None,
 ) -> None:
     """Internal function containing the actual pretrain logic.
 
@@ -127,6 +160,77 @@ def _pretrain(
     test_data_iterator = setup_output.test_data_iterator
     ckpt_context = setup_output.checkpointing_context
     pg_collection = setup_output.pg_collection
+
+    # TODO: print model parameters shapes
+    import logging
+    _logger = logging.getLogger("__main__")
+    import megatron.core
+    import megatron.training
+    _logger.debug(f"Starting pretraining...")
+    _logger.debug(f"megatron-core: {megatron.core.__version__} ({os.path.dirname(megatron.core.__file__)})")
+    _logger.debug(f"megatron-training: {os.path.dirname(megatron.training.__file__)}")
+
+    if dist.get_rank() == 0:
+        print("=== Model Architecture ===")
+        print(f"hidden_size: {config.model.hidden_size}")
+        print(f"num_layers: {config.model.num_layers}")
+        print(f"vocab_size: {config.model.vocab_size}")
+        # Attention
+        print(f"num_attention_heads: {config.model.num_attention_heads}")
+        print(f"kv_channels (head_dim): {getattr(config.model, 'kv_channels', None)}")
+        print(f"num_query_groups (num_kv_heads): {getattr(config.model, 'num_query_groups', None)}")
+        # FFN / MoE
+        print(f"ffn_hidden_size: {getattr(config.model, 'ffn_hidden_size', None)}")
+        print(f"num_experts: {getattr(config.model, 'num_moe_experts', None)}")
+        print(f"moe_ffn_hidden_size: {getattr(config.model, 'moe_ffn_hidden_size', None)}")
+        print(f"moe_router_topk: {getattr(config.model, 'moe_router_topk', None)}")
+        print(f"moe_shared_expert_intermediate_size: {getattr(config.model, 'moe_shared_expert_intermediate_size', None)}")
+        # Affects param count
+        print(f"gated_linear_unit: {getattr(config.model, 'gated_linear_unit', None)}")
+        print(f"add_bias_linear: {getattr(config.model, 'add_bias_linear', None)}")
+        print(f"share_embeddings_and_output_weights: {getattr(config.model, 'share_embeddings_and_output_weights', None)}")
+        total_params = sum(p.numel() for m in model for p in m.parameters())
+        print(f"num_params: {total_params / 1e9:.2f}B")
+        print("=== Training Configuration ===")
+        print(f"seq_length: {config.model.seq_length}")
+        print(f"micro_batch_size: {config.train.micro_batch_size}")
+        print("=== Parallelism ===")
+        print(f"tensor_parallel: {config.model.tensor_model_parallel_size}")
+        print(f"pipeline_parallel: {config.model.pipeline_model_parallel_size}")
+        if config.model.pipeline_model_parallel_size > 1:
+            print(f"  virtual_pipeline_parallel: {getattr(config.model, 'virtual_pipeline_model_parallel_size', None)}")
+            pp_layout = getattr(config.model, 'pipeline_model_parallel_layout', None)
+            if pp_layout is not None:
+                print(f"  pipeline_model_parallel_layout: {pp_layout}")
+            else:
+                print(f"  account_for_embedding_in_pipeline_split: {getattr(config.model, 'account_for_embedding_in_pipeline_split', False)}")
+                print(f"  account_for_loss_in_pipeline_split: {getattr(config.model, 'account_for_loss_in_pipeline_split', False)}")
+            print(f"  ddp.align_param_gather: {getattr(config.ddp, 'align_param_gather', False)}")
+            print(f"  NCCL_P2P_NET_CHUNKSIZE: {os.environ.get('NCCL_P2P_NET_CHUNKSIZE', 'not set')}")
+        print(f"expert_parallel: {getattr(config.model, 'expert_model_parallel_size', 1)}")
+        print(f"expert_tensor_parallel: {getattr(config.model, 'expert_tensor_parallel_size', 1)}")
+        print(f"data_parallel: {getattr(config, 'data_parallel_size', None)}")
+        ep_size = getattr(config.model, 'expert_model_parallel_size', 1) or 1
+        dp_size = getattr(config, 'data_parallel_size', None)
+        edp_size = dp_size // ep_size if dp_size else None
+        print(f"expert_data_parallel: {edp_size}")
+        print(f"use_distributed_optimizer: {config.optimizer.use_distributed_optimizer}")
+        print(f"use_megatron_fsdp: {config.dist.use_megatron_fsdp}")
+        print(f"use_torch_fsdp2: {config.dist.use_torch_fsdp2}")
+        print("=== Model Parameters ===")
+    for i, m in enumerate(model):
+        print(f"=== Model chunk {i} ===")
+        all_params = [(n, p.shape) for n, p in m.named_parameters()]
+        MAX_SHOW = 5
+        if len(all_params) <= MAX_SHOW * 2:
+            print(pformat(all_params, width=200))
+        else:
+            print(pformat(all_params[:MAX_SHOW], width=200))
+            print(f"  ... ({len(all_params) - MAX_SHOW * 2} more parameters) ...")
+            print(pformat(all_params[-MAX_SHOW:], width=200))
+        # Note: .std() not supported on DTensors (FSDP)
+        # print(pformat([(n, round(p.mean().item(), 4), round(p.std().item(), 4)) for n, p in m.named_parameters()], width=200))
+
 
     # TRAINING
     if not config.train.skip_train:

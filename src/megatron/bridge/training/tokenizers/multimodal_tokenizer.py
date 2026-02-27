@@ -16,7 +16,7 @@ try:
     from megatron.core.datasets.megatron_tokenizer import MegatronLegacyTokenizer as MegatronTokenizer
 except ImportError:
     # Fallback to old path
-    from megatron.core.datasets.megatron_tokenizer import MegatronTokenizer as MegatronTokenizer
+    from megatron.core.tokenizers.megatron_tokenizer import MegatronTokenizer as MegatronTokenizer
 
 
 IMAGE_TAGS = {

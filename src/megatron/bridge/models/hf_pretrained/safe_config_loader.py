@@ -22,6 +22,7 @@ multiple threads try to download and cache the same model simultaneously.
 
 import hashlib
 import os
+import socket
 import time
 from pathlib import Path
 from typing import Union
@@ -77,6 +78,11 @@ def safe_load_config_with_retry(
         >>> os.environ["MEGATRON_CONFIG_LOCK_DIR"] = "/shared/locks"
         >>> config = safe_load_config_with_retry("meta-llama/Meta-Llama-3-8B")
     """
+    # Skip locking entirely if MEGATRON_SKIP_CONFIG_LOCK is set
+    # Useful when config is pre-cached or in large multi-node setups where lock contention is problematic
+    if os.getenv("MEGATRON_SKIP_CONFIG_LOCK", "").lower() in ("1", "true", "yes"):
+        return AutoConfig.from_pretrained(path, trust_remote_code=trust_remote_code, **kwargs)
+
     last_exception = None
 
     for attempt in range(max_retries + 1):
