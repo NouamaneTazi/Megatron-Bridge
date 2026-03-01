@@ -13,12 +13,35 @@
 # limitations under the License.
 
 import datetime
+import logging
 import os
 import warnings
 from typing import Callable, Optional
 
-import torch
 import torch.distributed
+
+
+class _RankFilter(logging.Filter):
+    """Injects the global distributed rank into every log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if torch.distributed.is_initialized():
+            record.rank = torch.distributed.get_rank()
+        else:
+            record.rank = int(os.environ.get("RANK", 0))
+        return True
+
+
+# Configure root logger so MCore logger.info() messages (e.g. CUDA graph capture)
+# are visible. Respects LOGLEVEL env var, defaults to INFO.
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOGLEVEL", "INFO").upper(), logging.INFO),
+    format="%(levelname)s:%(name)s:[rank %(rank)d] %(message)s",
+)
+for _handler in logging.root.handlers:
+    _handler.addFilter(_RankFilter())
+
+import torch
 import torch.nn.functional as F
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.fusions.fused_bias_dropout import bias_dropout_add_fused_train
@@ -169,12 +192,16 @@ def torch_dist_init(
         # Random seeds for reproducibility.
         if get_rank_safe() == 0:
             print("> setting random seeds to {} ...".format(rng_config.seed))
+        _use_cudagraphable_rng = model_config.cuda_graph_impl != "none"
+        if get_rank_safe() == 0 and _use_cudagraphable_rng:
+            print(f"[CUDA Graph] Enabling cudagraphable RNG tracker "
+                  f"(cuda_graph_impl={model_config.cuda_graph_impl})")
         _set_random_seed(
             rng_config.seed,
             rng_config.data_parallel_random_init,
             rng_config.te_rng_tracker,
             rng_config.inference_rng_tracker,
-            use_cudagraphable_rng=(model_config.cuda_graph_impl != "none"),
+            use_cudagraphable_rng=_use_cudagraphable_rng,
         )
 
         if model_config.num_moe_experts is not None:
@@ -381,6 +408,8 @@ def _initialize_distributed(
 
         # Set to non-default stream for cudagraph capturing.
         if model_config.cuda_graph_impl == "transformer_engine":
+            if get_rank_safe() == 0:
+                print("[CUDA Graph] Setting non-default CUDA stream for TE graph capturing")
             torch.cuda.set_stream(torch.cuda.Stream())
 
         # Ensure MASTER_ADDR and MASTER_PORT are set for distributed initialization

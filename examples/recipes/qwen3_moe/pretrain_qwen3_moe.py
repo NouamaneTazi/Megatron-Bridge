@@ -13,17 +13,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Qwen3 MoE Pretraining Script with YAML and CLI Configuration Overrides.
+
+This script provides a flexible way to pretrain Qwen3 MoE models (30B-A3B or 235B-A22B)
+using Megatron-Bridge with support for both YAML configuration files and command-line
+overrides using Hydra-style syntax.
+
+Examples:
+    Basic usage with Qwen3-30B-A3B (default):
+        $ torchrun --nproc_per_node=8 pretrain_qwen3_moe.py
+
+    Using Qwen3-235B-A22B:
+        $ torchrun --nproc_per_node=8 pretrain_qwen3_moe.py --model 235b
+
+    Using CLI overrides:
+        $ torchrun --nproc_per_node=8 pretrain_qwen3_moe.py \\
+            model.tensor_model_parallel_size=4 \\
+            model.expert_model_parallel_size=8 \\
+            train.train_iters=100000
+
+    With mock data for testing:
+        $ torchrun --nproc_per_node=8 pretrain_qwen3_moe.py dataset.mock=true
+"""
+
 import argparse
 import logging
 import os
+import signal
 import sys
+import time
 from typing import Tuple
 
+import debugpy
 import torch
 from omegaconf import OmegaConf
 
-from megatron.bridge.recipes.nemotronh.nemotron_3_nano import (
-    nemotron_3_nano_pretrain_config as pretrain_config,
+from megatron.bridge.recipes.qwen.qwen3_moe import (
+    qwen3_30b_a3b_pretrain_config,
+    qwen3_235b_a22b_pretrain_config,
 )
 from megatron.bridge.training.config import ConfigContainer
 from megatron.bridge.training.gpt_step import forward_step
@@ -41,16 +69,23 @@ logger: logging.Logger = logging.getLogger(__name__)
 def parse_cli_args() -> Tuple[argparse.Namespace, list[str]]:
     """Parse command line arguments, separating known script args from OmegaConf overrides."""
     parser = argparse.ArgumentParser(
-        description="Pretrain Llama3 8B model using Megatron-Bridge with YAML and CLI overrides",
+        description="Pretrain Qwen3 MoE model using Megatron-Bridge with YAML and CLI overrides",
         formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="30b",
+        choices=["30b", "235b"],
+        help="Model variant to use: '30b' for Qwen3-30B-A3B, '235b' for Qwen3-235B-A22B (default: 30b)",
     )
     parser.add_argument(
         "--config-file",
         type=str,
-        help="Path to the YAML OmegaConf override file. Default: conf/llama3_8b_pretrain_override_example.yaml",
+        help="Path to the YAML OmegaConf override file (optional)",
     )
     parser.add_argument("--per-split-data-args-path", type=str, help="Path to the per split data args file.")
-    parser.add_argument("--tokenizer-model", type=str, help="Path to the tokenizer model file.")
+    parser.add_argument("--tokenizer-model", type=str, help="Path or HF model ID for the tokenizer.")
 
     # Parse known args for the script, remaining will be treated as overrides
     args, cli_dotlist_overrides = parser.parse_known_args()
@@ -59,18 +94,32 @@ def parse_cli_args() -> Tuple[argparse.Namespace, list[str]]:
 
 def main() -> None:
     """
-    Entry point for the Mamba 8B pretraining script.
+    Entry point for the Qwen3 MoE pretraining script.
     """
-    logging.basicConfig(
-        format="%(filename)s:%(lineno)d - %(levelname)s - %(message)s",
-        level=logging.DEBUG,
-    )
+    if os.environ.get("DEBUG", "") == "1":
+        rank = int(os.environ.get("RANK", "0"))
+        port = 5678 + rank
+        debugpy.listen(("0.0.0.0", port))
+        if rank == 0:
+            logger.info(f"⏳ Rank 0 waiting for debugger on port {port}...")
+            debugpy.wait_for_client()
+            logger.info("🔗 Rank 0 debugger attached!")
+        else:
+            logger.info(f"Rank {rank} debugpy listening on port {port} (attach anytime)")
+
     args, cli_overrides = parse_cli_args()
 
-    cfg: ConfigContainer = pretrain_config(
-        per_split_data_args_path=args.per_split_data_args_path,
-        tokenizer_model=args.tokenizer_model,
-    )
+    # Select the appropriate config based on model variant
+    if args.model == "235b":
+        cfg: ConfigContainer = qwen3_235b_a22b_pretrain_config(
+            per_split_data_args_path=args.per_split_data_args_path,
+        )
+        logger.info("Using Qwen3-235B-A22B configuration")
+    else:
+        cfg: ConfigContainer = qwen3_30b_a3b_pretrain_config(
+            per_split_data_args_path=args.per_split_data_args_path,
+        )
+        logger.info("Using Qwen3-30B-A3B configuration")
 
     # Convert the initial Python dataclass to an OmegaConf DictConfig for merging
     merged_omega_conf, excluded_fields = create_omegaconf_dict_config(cfg)
@@ -97,9 +146,25 @@ def main() -> None:
     # Apply overrides while preserving excluded fields
     apply_overrides(cfg, final_overrides_as_dict, excluded_fields)
 
+    # PP_LAYOUT env var bypasses Hydra (special chars like |, *, () break Hydra grammar)
+    if pp_layout := os.environ.get("PP_LAYOUT"):
+        cfg.model.pipeline_model_parallel_layout = pp_layout
+        logger.info(f"Using PP_LAYOUT from env: {pp_layout}")
+
     # Start training
     logger.debug("Starting pretraining...")
-    pretrain(config=cfg, forward_step_func=forward_step)
+    if os.environ.get("DEBUG", "") == "1":
+        try:
+            pretrain(config=cfg, forward_step_func=forward_step)
+        except Exception as e:
+            rank = int(os.environ.get("RANK", "0"))
+            logger.error(f"Rank {rank} caught exception: {e}")
+            debugpy.breakpoint()  # debugger will pause here — inspect `e`
+            # Keep process alive so other ranks don't get killed by NCCL timeout
+            logger.info(f"Rank {rank} holding process alive for debugging. Ctrl+C or kill to exit.")
+            signal.pause()
+    else:
+        pretrain(config=cfg, forward_step_func=forward_step)
 
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()

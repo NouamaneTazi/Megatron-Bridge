@@ -47,11 +47,6 @@ from megatron.core.optimizer import DistributedOptimizer, MegatronOptimizer
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.transformer import MegatronModule
 from megatron.core.utils import get_torch_version, is_torch_min_version, unwrap_model
-from modelopt.torch.opt.plugins import (
-    restore_modelopt_state,
-    save_modelopt_state,
-    save_sharded_modelopt_state,
-)
 
 from megatron.bridge.peft.base import PEFT
 from megatron.bridge.training import fault_tolerance
@@ -565,6 +560,29 @@ def save_checkpoint(
 
             # FSDP DTensor checkpoint save path using PyTorch Distributed Checkpointing
             fs_storage_writer = torch.distributed.checkpoint.FileSystemWriter(checkpoint_name)
+            if os.environ.get("DEBUG", "") == "1":
+                import pickle
+                def _flatten_state_dict(d, prefix=""):
+                    result = {}
+                    for k, v in d.items():
+                        key = f"{prefix}.{k}" if prefix else k
+                        if isinstance(v, dict):
+                            result.update(_flatten_state_dict(v, key))
+                        elif hasattr(v, 'items'):  # OrderedDict etc
+                            result.update(_flatten_state_dict(v, key))
+                        else:
+                            info = {"type": type(v).__name__, "shape": getattr(v, 'shape', None), "dtype": str(getattr(v, 'dtype', None))}
+                            if hasattr(v, 'placements'):
+                                info["placements"] = str(v.placements)
+                                info["device_mesh"] = str(v.device_mesh)
+                            result[key] = info
+                    return result
+                rank = torch.distributed.get_rank()
+                dump_path = f"/iopsstor/scratch/cscs/ntazi/projects/Megatron-Bridge/debug_state_dict_hsdp_rank{rank}.pkl"
+                with open(dump_path, "wb") as f:
+                    pickle.dump(_flatten_state_dict(state_dict), f)
+                getLogger(__name__).info(f"Rank {rank} dumped flattened state_dict to {dump_path}")
+                torch.distributed.barrier()
             torch.distributed.checkpoint.save(
                 state_dict=state_dict,
                 storage_writer=fs_storage_writer,
@@ -611,12 +629,16 @@ def save_checkpoint(
                 content_metadata=sharded_sd_metadata,
             )
             # [ModelOpt]: save sharded modelopt_state
+            from modelopt.torch.opt.plugins import save_sharded_modelopt_state
+
             save_sharded_modelopt_state(model, checkpoint_name, (ckpt_cfg.ckpt_format, 1))
     else:
         # [ModelOpt]: Inject modelopt_state into state_dict
         if ckpt_type == CheckpointType.LOCAL:
             print_rank_0("WARNING: Local checkpointing does not support nvidia_modelopt.")
         else:  # GLOBAL checkpoint type
+            from modelopt.torch.opt.plugins import save_modelopt_state
+
             save_modelopt_state(model, state_dict)
 
         end_ckpt = time()
@@ -1169,6 +1191,8 @@ def _load_model_weights_from_checkpoint(
     model_sd_kwargs = dict(metadata=sharded_sd_metadata)
 
     # [ModelOpt]: Restore state
+    from modelopt.torch.opt.plugins import restore_modelopt_state
+
     restore_modelopt_state(model, state_dict)
 
     model = unwrap_model(model)
@@ -1668,7 +1692,8 @@ def _load_checkpoint_from_path(
     if not torch.distributed.is_initialized() or is_last_rank():
         wandb_utils.on_load_checkpoint_success(checkpoint_name, load_dir, state.wandb_logger)
 
-    torch.cuda.empty_cache()
+    if not os.environ.get("MEGATRON_BRIDGE_SKIP_EMPTY_CACHE", ""):
+        torch.cuda.empty_cache()
 
     if state.train_state.step > 0:
         is_local_chkpt = ckpt_type == CheckpointType.LOCAL

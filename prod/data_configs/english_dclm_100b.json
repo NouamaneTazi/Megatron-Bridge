@@ -1,0 +1,30 @@
+{
+    "train": [
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-1-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-7-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-8-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-9-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-10-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-12-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-14-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-17-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-18-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-20-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-25-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-26-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-29-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-30-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-31-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-34-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-35-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-36-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-37-merged",
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-38-merged"
+    ],
+    "valid": [
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-1-merged"
+    ],
+    "test": [
+        "/iopsstor/scratch/cscs/jpcoles/a06/phase-4/swissai-dclm-edu-filterrobots_fine-merge/dump-1-merged"
+    ]
+}

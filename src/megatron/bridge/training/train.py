@@ -25,6 +25,7 @@ import torch.profiler
 from megatron.core import parallel_state
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.full_cuda_graph import FullCudaGraphWrapper
+from megatron.core.transformer.enums import CudaGraphScope
 from megatron.core.num_microbatches_calculator import (
     get_current_global_batch_size,
     get_current_running_global_batch_size,
@@ -41,7 +42,6 @@ from megatron.core.rerun_state_machine import RerunDataIterator, get_rerun_state
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 from megatron.core.utils import check_param_hashes_across_dp_replicas, get_model_config
-from modelopt.torch.distill.plugins.megatron import get_tensor_shapes_adjust_fn_for_distillation
 
 from megatron.bridge.training import fault_tolerance
 from megatron.bridge.training.checkpointing import maybe_finalize_async_save, save_checkpoint
@@ -229,7 +229,13 @@ def train(
 
     # Capture CUDA Graphs.
     cuda_graph_helper = None
+    print_rank_0(f"[CUDA Graph] impl={model_config.cuda_graph_impl}, "
+                 f"scope={model_config.cuda_graph_scope}, "
+                 f"warmup_steps={model_config.cuda_graph_warmup_steps}")
     if model_config.cuda_graph_impl == "transformer_engine":
+        print_rank_0("[CUDA Graph] Initializing TECudaGraphHelper "
+                     f"(seq_length={config.model.seq_length}, "
+                     f"micro_batch_size={config.train.micro_batch_size})")
         cuda_graph_helper = TECudaGraphHelper(
             model=model,
             config=model_config,
@@ -237,6 +243,12 @@ def train(
             micro_batch_size=config.train.micro_batch_size,
             optimizers=[optimizer],
         )
+        print_rank_0("[CUDA Graph] TECudaGraphHelper initialized, "
+                     f"will capture after {model_config.cuda_graph_warmup_steps} warmup steps")
+    elif model_config.cuda_graph_impl == "none":
+        print_rank_0("[CUDA Graph] Disabled (impl=none)")
+    else:
+        print_rank_0(f"[CUDA Graph] Using impl={model_config.cuda_graph_impl}")
 
     # Track train step elapsed time for throughput logging
     history_wct = None
@@ -245,7 +257,9 @@ def train(
 
     # Wrap forward_backward_func for Full iteration CUDA graph
     forward_backward_func = get_forward_backward_func()
-    if config.model.cuda_graph_impl == "local" and "full_iteration" in config.model.cuda_graph_scope:
+    if config.model.cuda_graph_impl == "local" and CudaGraphScope.full_iteration in config.model.cuda_graph_scope:
+        print_rank_0(f"[CUDA Graph] Wrapping forward_backward_func with FullCudaGraphWrapper "
+                     f"(warmup_steps={config.model.cuda_graph_warmup_steps})")
         forward_backward_func = FullCudaGraphWrapper(
             forward_backward_func, cuda_graph_warmup_steps=config.model.cuda_graph_warmup_steps
         )
@@ -312,12 +326,16 @@ def train(
             and not cuda_graph_helper.graphs_created()
             and global_state.train_state.step - start_iteration == model_config.cuda_graph_warmup_steps
         ):
+            print_rank_0(f"[CUDA Graph] Warmup complete at step {global_state.train_state.step}, "
+                         f"capturing TE CUDA graphs now...")
             if model_config.cuda_graph_warmup_steps > 0 and should_toggle_forward_pre_hook:
                 disable_forward_pre_hook(model, param_sync=False)
             cuda_graph_helper.create_cudagraphs()
+            print_rank_0("[CUDA Graph] TE CUDA graphs captured successfully")
             if model_config.cuda_graph_warmup_steps > 0 and should_toggle_forward_pre_hook:
                 enable_forward_pre_hook(model)
                 cuda_graph_helper.cuda_graph_set_manual_hooks()
+                print_rank_0("[CUDA Graph] TE manual hooks set (forward pre-hook path)")
 
         # Run training step.
         fault_tolerance.on_training_step_start(global_state)
@@ -377,6 +395,7 @@ def train(
                     ):
                         assert cuda_graph_helper.graphs_created(), "CUDA Graphs should have been created."
                         cuda_graph_helper.cuda_graph_set_manual_hooks()
+                        print_rank_0("[CUDA Graph] TE manual hooks set (zero-warmup path, step 0)")
 
         global_state.train_state.step += 1
         dp_size = pg_collection.dp.size()
@@ -631,6 +650,7 @@ def train_step(
             )
 
         # [ModelOpt]: Pipeline-parallel Distillation stacks student and teacher tensors
+        from modelopt.torch.distill.plugins.megatron import get_tensor_shapes_adjust_fn_for_distillation
         adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
             model,
             seq_length=model_config.seq_length,

@@ -25,6 +25,7 @@ import torch
 from megatron.core import parallel_state
 from megatron.core.models.gpt import GPTModel as MCoreGPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
+    get_gpt_decoder_block_spec,
     get_gpt_layer_local_spec,
     get_gpt_layer_with_transformer_engine_spec,
 )
@@ -107,12 +108,31 @@ def quantization_layer_spec(config: "GPTModelProvider") -> ModuleSpec:
     )
 
 
-def default_layer_spec(config: "GPTModelProvider") -> ModuleSpec:
-    """Determine the most appropriate layer specification based on availability."""
+def _has_mixed_dense_moe_layers(config: "GPTModelProvider") -> bool:
+    """Check if moe_layer_freq defines a mix of dense and MoE layers."""
+    freq = getattr(config, "moe_layer_freq", 1)
+    if isinstance(freq, list):
+        return 0 in freq and 1 in freq
+    if isinstance(freq, int):
+        return freq > 1
+    return False
+
+
+def default_layer_spec(config: "GPTModelProvider", vp_stage: int = None) -> ModuleSpec:
+    """Determine the most appropriate layer specification based on availability.
+
+    When moe_layer_freq defines mixed dense/MoE layers, returns a
+    TransformerBlockSubmodules with per-layer specs. Otherwise returns a single
+    ModuleSpec that is replicated for all layers.
+    """
     if config.restore_modelopt_state:
         return quantization_layer_spec(config)
     elif config.use_transformer_engine_full_layer_spec:
         return transformer_engine_full_layer_spec(config)
+    elif _has_mixed_dense_moe_layers(config):
+        return get_gpt_decoder_block_spec(
+            config=config, use_transformer_engine=True, vp_stage=vp_stage,
+        )
     else:
         return transformer_engine_layer_spec(config)
 
@@ -379,7 +399,7 @@ def mtp_block_spec(config: "GPTModelProvider", vp_stage: Optional[int] = None) -
         if hasattr(spec, "layer_specs") and len(spec.layer_specs) == 0:
             # Get the decoder layer spec explicitly if no decoder layer in the last stage,
             # Only happens with block spec (TransformerBlockSubmodules) when using MoE.
-            spec = default_layer_spec(config)
+            spec = transformer_engine_layer_spec(config)
         return get_gpt_mtp_block_spec(config, spec, use_transformer_engine=True, vp_stage=vp_stage)
     else:
         return None

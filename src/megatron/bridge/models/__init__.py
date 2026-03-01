@@ -101,24 +101,26 @@ from megatron.bridge.models.llama_nemotron import (
     LlamaNemotronBridge,
     LlamaNemotronHeterogeneousProvider,
 )
-from megatron.bridge.models.mamba.mamba_provider import (
-    MambaModelProvider,
-    MambaModelProvider1P3B,
-    MambaModelProvider2P7B,
-    MambaModelProvider130M,
-    MambaModelProvider370M,
-    MambaModelProvider780M,
-    MambaProvider,
-    MambaProvider1_3B,
-    MambaProvider2_7B,
-    MambaProvider130M,
-    MambaProvider370M,
-    MambaProvider780M,
-    NVIDIAMambaHybridModelProvider8B,
-    NVIDIAMambaHybridProvider8B,
-    NVIDIAMambaModelProvider8B,
-    NVIDIAMambaProvider8B,
-)
+# Mamba providers are lazy-loaded to avoid importing flashinfer/tvm_ffi (~20s)
+# at startup when training non-Mamba models. Access any name below to trigger the import.
+_LAZY_MAMBA_PROVIDERS = {
+    "MambaModelProvider",
+    "MambaModelProvider1P3B",
+    "MambaModelProvider2P7B",
+    "MambaModelProvider130M",
+    "MambaModelProvider370M",
+    "MambaModelProvider780M",
+    "MambaProvider",
+    "MambaProvider1_3B",
+    "MambaProvider2_7B",
+    "MambaProvider130M",
+    "MambaProvider370M",
+    "MambaProvider780M",
+    "NVIDIAMambaHybridModelProvider8B",
+    "NVIDIAMambaHybridProvider8B",
+    "NVIDIAMambaModelProvider8B",
+    "NVIDIAMambaProvider8B",
+}
 from megatron.bridge.models.mistral import (
     MistralModelProvider,
     MistralSmall3ModelProvider24B,
@@ -132,28 +134,29 @@ from megatron.bridge.models.nemotron import (
     NemotronBridge,
     NemotronModelProvider,
 )
-from megatron.bridge.models.nemotron_vl import (
-    NemotronNano12Bv2Provider,
-    NemotronNano12Bv2VLModelProvider,
-    NemotronVLBridge,
-    NemotronVLModel,
-)
-from megatron.bridge.models.nemotronh.nemotron_h_provider import (
-    NemotronHModel4BProvider,
-    NemotronHModel8BProvider,
-    NemotronHModel47BProvider,
-    NemotronHModel56BProvider,
-    NemotronHModelProvider,
-    NemotronHModelProvider4B,
-    NemotronHModelProvider8B,
-    NemotronHModelProvider47B,
-    NemotronHModelProvider56B,
-    NemotronNano9Bv2Provider,
-    NemotronNano12Bv2Provider,
-    NemotronNanoModelProvider9Bv2,
-    NemotronNanoModelProvider12Bv2,
-    Nemotron3NanoProvider,
-)
+# NemotronVL and NemotronH providers are lazy-loaded because they depend on
+# mamba imports (mamba_stack_spec, MambaModelProvider) which pull in flashinfer/tvm_ffi.
+_LAZY_NEMOTRON_VL_PROVIDERS = {
+    "NemotronNano12Bv2VLModelProvider",
+    "NemotronVLBridge",
+    "NemotronVLModel",
+}
+_LAZY_NEMOTRONH_PROVIDERS = {
+    "NemotronHModel4BProvider",
+    "NemotronHModel8BProvider",
+    "NemotronHModel47BProvider",
+    "NemotronHModel56BProvider",
+    "NemotronHModelProvider",
+    "NemotronHModelProvider4B",
+    "NemotronHModelProvider8B",
+    "NemotronHModelProvider47B",
+    "NemotronHModelProvider56B",
+    "NemotronNano9Bv2Provider",
+    "NemotronNano12Bv2Provider",
+    "NemotronNanoModelProvider9Bv2",
+    "NemotronNanoModelProvider12Bv2",
+    "Nemotron3NanoProvider",
+}
 from megatron.bridge.models.olmoe import (
     OlMoEBridge,
     OlMoEModelProvider,
@@ -336,3 +339,28 @@ __all__ = [
     "NemotronNano12Bv2Provider",
     "NemotronNano12Bv2VLModelProvider",
 ]
+
+
+def __getattr__(name):
+    if name in _LAZY_MAMBA_PROVIDERS:
+        import megatron.bridge.models.mamba.mamba_provider as _mamba_mod
+
+        for n in _LAZY_MAMBA_PROVIDERS:
+            globals()[n] = getattr(_mamba_mod, n)
+        return globals()[name]
+
+    if name in _LAZY_NEMOTRONH_PROVIDERS:
+        import megatron.bridge.models.nemotronh.nemotron_h_provider as _nh_mod
+
+        for n in _LAZY_NEMOTRONH_PROVIDERS:
+            globals()[n] = getattr(_nh_mod, n)
+        return globals()[name]
+
+    if name in _LAZY_NEMOTRON_VL_PROVIDERS:
+        import megatron.bridge.models.nemotron_vl as _nvl_mod
+
+        for n in _LAZY_NEMOTRON_VL_PROVIDERS:
+            globals()[n] = getattr(_nvl_mod, n)
+        return globals()[name]
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

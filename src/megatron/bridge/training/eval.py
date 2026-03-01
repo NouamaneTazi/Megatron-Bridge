@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional, Union
 import torch
 from megatron.core import parallel_state
 from megatron.core.full_cuda_graph import FullCudaGraphWrapper
+from megatron.core.transformer.enums import CudaGraphScope
 from megatron.core.num_microbatches_calculator import get_num_microbatches
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.rerun_state_machine import RerunDataIterator, RerunMode, get_rerun_state_machine
@@ -88,11 +89,17 @@ def evaluate(
         if verbose:
             print_rank_0(f"Evaluating on {state.cfg.train.eval_iters * eval_batch_size} samples")
 
-        if state.cfg.model.cuda_graph_impl == "local" and "full_iteration" in state.cfg.model.cuda_graph_scope:
+        if state.cfg.model.cuda_graph_impl == "local" and CudaGraphScope.full_iteration in state.cfg.model.cuda_graph_scope:
+            print_rank_0(f"[CUDA Graph] Eval: using FullCudaGraphWrapper "
+                         f"(warmup_steps={state.cfg.model.cuda_graph_warmup_steps})")
             forward_backward_func = FullCudaGraphWrapper(
                 get_forward_backward_func(), cuda_graph_warmup_steps=state.cfg.model.cuda_graph_warmup_steps
             )
         else:
+            if state.cfg.model.cuda_graph_impl != "none":
+                print_rank_0(f"[CUDA Graph] Eval: impl={state.cfg.model.cuda_graph_impl}, "
+                             f"scope={state.cfg.model.cuda_graph_scope} "
+                             f"(TE graphs replay from training capture)")
             forward_backward_func = get_forward_backward_func()
 
         iteration = 0

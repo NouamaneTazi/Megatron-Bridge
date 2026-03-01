@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from typing import Callable, Optional, Union
 
 import torch.nn as nn
 from megatron.core.optimizer import MegatronOptimizer, OptimizerConfig, get_megatron_optimizer
+from megatron.core.optimizer.muon import get_megatron_muon_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.transformer.module import MegatronModule
 
@@ -45,14 +47,24 @@ def setup_optimizer(
     Returns:
         tuple containing the optimizer and scheduler
     """
-    optimizer = get_megatron_optimizer(
-        optimizer_config,
-        model,
-        # no_weight_decay_cond,
-        # scale_lr_cond,
-        # lr_mult,
-        use_gloo_process_groups=use_gloo_process_groups,
-    )
+    logging.warning(f"[DEBUG optim.setup_optimizer] optimizer_config.overlap_param_gather = {getattr(optimizer_config, 'overlap_param_gather', 'N/A')}")
+    logging.warning(f"[DEBUG optim.setup_optimizer] optimizer_config id = {id(optimizer_config)}")
+    if 'muon' in optimizer_config.optimizer:
+        optimizer = get_megatron_muon_optimizer(
+            optimizer_config,
+            model,
+            use_gloo_process_groups=use_gloo_process_groups,
+            layer_wise_distributed_optimizer='dist' in optimizer_config.optimizer,
+        )
+    else:
+        optimizer = get_megatron_optimizer(
+            optimizer_config,
+            model,
+            # no_weight_decay_cond,
+            # scale_lr_cond,
+            # lr_mult,
+            use_gloo_process_groups=use_gloo_process_groups,
+        )
     scheduler = _get_scheduler(optimizer_config, scheduler_config, optimizer)
 
     return optimizer, scheduler

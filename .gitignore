@@ -182,3 +182,38 @@ slurm*.out
 
 # UV package manager
 .uv/
+wandb_downloads/
+
+# ===========================================
+# Local development artifacts (added by user)
+# ===========================================
+
+# Core dumps
+core_*
+core.*
+
+# Compiled binaries
+a.out
+
+# SLURM logs and memory snapshots (large artifacts)
+noua/slurm_logs/
+*.pickle
+
+# WandB downloads (can be re-fetched)
+wandb_downloads/
+
+# Analysis outputs
+analysis_*.txt
+*_analysis*.txt
+
+# Local logs
+logs/
+
+# Claude Code personal config
+.claude/
+
+# Git worktrees for parallel development
+.worktrees/
+noua/*
+
+prod/slurm_logs
